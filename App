@@ -1,0 +1,134 @@
+from flask import Flask, render_template, request, redirect, url_for
+import os
+from werkzeug.utils import secure_filename
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras.preprocessing import image
+from tensorflow.keras.models import load_model
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+# Initialize the Flask app
+app = Flask(__name__)
+
+# Define the upload folder and allowed extensions
+UPLOAD_FOLDER = 'uploads/'
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
+
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+# Ensure the upload folder exists
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+
+# Define the paths to the models
+models = {
+    "InceptionV3": r'C:\Users\jayan\PycharmProjects\eye_project\eye_disease_classifier_finetuned.h5',
+    "ResNet50": r'C:\Users\jayan\PycharmProjects\eye_project\resnet50_eye_disease_classifier_finetuned.h5',
+    "VGG19": r'C:\Users\jayan\PycharmProjects\eye_project\eye_disease_classifier_vgg19_finetuned.h5'
+}
+
+# Define the input sizes for the models
+input_sizes = {
+    "InceptionV3": (299, 299),
+    "ResNet50": (224, 224),
+    "VGG19": (224, 224)
+}
+
+# Define the class names
+class_names = ['Cataract', 'Diabetes', 'Glaucoma', 'Hypertension', 'Myopia', 'Normal']
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def load_and_preprocess_image(img_path, target_size):
+    img = image.load_img(img_path, target_size=target_size)
+    img_array = image.img_to_array(img)
+    img_array = np.expand_dims(img_array, axis=0)  # Add batch dimension
+    img_array = img_array / 255.0  # Normalize to [0,1] range
+    return img_array
+
+def classify_image(model, img_path, input_size):
+    img_array = load_and_preprocess_image(img_path, target_size=input_size)
+    predictions = model.predict(img_array)
+    predicted_class = np.argmax(predictions, axis=1)
+    predicted_class_name = class_names[predicted_class[0]]
+    confidence = predictions[0][predicted_class[0]]
+    return predicted_class_name, confidence
+
+def send_email(recipient, predicted_class_name, confidence):
+    sender_email = "chandanamahesh905@gmail.com"
+    sender_password = "kaow tbvz yrdu ucer"  # Replace with the actual app password
+
+    msg = MIMEMultipart()
+    msg['From'] = sender_email
+    msg['To'] = recipient
+    msg['Subject'] = 'Eye Disease Detection Result'
+
+    body = f"""
+
+    We have analyzed your eye image and here are the results:
+
+    Diagnosis: {predicted_class_name}
+    Confidence Level: {confidence:.2f}%
+
+    Tips for Eye Health:
+
+    1. Regular Eye Check-Ups: Visit an ophthalmologist regularly to monitor your eye health.
+    2. Protect Your Eyes: Wear sunglasses to shield your eyes from harmful UV rays.
+    3. Healthy Diet: Consume foods rich in vitamins and minerals that support eye health.
+    4. Reduce Screen Time: Take breaks from screens to avoid eye strain.
+    5. Proper Lighting: Ensure you have adequate lighting while reading or working to prevent eye fatigue.
+
+    If you have any questions or need further assistance, please do not hesitate to contact us.
+
+    """
+    msg.attach(MIMEText(body, 'plain'))
+
+    # Connect to email server
+    server = smtplib.SMTP('smtp.gmail.com', 587)  # For Gmail
+    server.starttls()
+    server.login(sender_email, sender_password)
+    text = msg.as_string()
+    server.sendmail(sender_email, recipient, text)
+    server.quit()
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    if request.method == 'POST':
+        selected_model_name = request.form['model']
+        name = request.form['name']
+        age = request.form['age']
+        phone = request.form['phone']
+        email = request.form['email']
+
+        if 'image' not in request.files:
+            return "No file part"
+
+        file = request.files['image']
+
+        if file.filename == '':
+            return "No selected file"
+
+        if file and allowed_file(file.filename):
+            filename = secure_filename(file.filename)
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            file.save(file_path)
+
+            # Load the selected model
+            model_path = models[selected_model_name]
+            model = load_model(model_path)
+
+            # Classify the image
+            input_size = input_sizes[selected_model_name]
+            predicted_class_name, confidence = classify_image(model, file_path, input_size)
+            send_email(email, predicted_class_name, confidence)
+
+            return render_template('result.html', model_name=selected_model_name,
+                                   predicted_class_name=predicted_class_name, confidence=confidence)
+
+    return render_template('index.html', models=models.keys())
+
+if __name__ == '__main__':
+    app.run(debug=True)
